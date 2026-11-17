@@ -1,0 +1,108 @@
+name: Merge Jild 24 tashreeh
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Merge chunks
+        run: python3 merge_jild24.py
+      - name: Verify merged file
+        run: |
+          python3 - <<'EOF'
+          import json
+          d = json.load(open('jild-24.json', encoding='utf-8'))
+          items = d['masail']
+          pages = set()
+          for it in items:
+              pages.update(it['pages'])
+          print('items:', len(items))
+          print('unique pages:', len(pages), 'min:', min(pages), 'max:', max(pages))
+          print('ids unique:', len(set(it['id'] for it in items)) == len(items))
+          print('empty jawab:', [it['id'] for it in items if not it.get('tashreeh_jawab')])
+          print('empty sawal:', [it['id'] for it in items if not it.get('tashreeh_sawal')])
+          print('volume_ids:', sorted(set(it.get('volume_id') for it in items)))
+          print('start_page==min(pages) all:', all(it.get('start_page') == min(it['pages']) for it in items))
+          print('sorted by start_page:', [it['start_page'] for it in items] == sorted(it['start_page'] for it in items))
+          combined = {
+              'jild24-masala-18': ([120, 121, 122, 123, 124, 125], 3150, 5382),
+              'jild24-masala-84': (list(range(216, 285)), 539, 71278),
+              'jild24-masala-166': (list(range(416, 451)), 2019, 16733),
+              'jild24-masala-250': ([571, 572] + list(range(574, 644)), 907, 83106),
+          }
+          for cid, (expected_pages, exp_sawal, exp_jawab) in combined.items():
+              hits = [it for it in items if it['id'] == cid]
+              print(cid, 'items:', len(hits), 'pages:', hits[0]['pages'][0], '-', hits[0]['pages'][-1], f'({len(hits[0]["pages"])} pages)' if hits else None)
+              assert len(hits) == 1
+              assert hits[0]['pages'] == expected_pages, f'{cid}: pages mismatch'
+              assert len(hits[0].get('tashreeh_sawal', '')) == exp_sawal, f'{cid}: sawal length mismatch'
+              assert len(hits[0].get('tashreeh_jawab', '')) == exp_jawab, f'{cid}: jawab length mismatch'
+              assert hits[0].get('tashreeh_sawal'), f'{cid}: sawal empty'
+              assert hits[0].get('tashreeh_jawab'), f'{cid}: jawab empty'
+          # absorbed id must be gone (risala-139 renamed+combined into masala-84)
+          for sid in ['jild24-risala-139']:
+              assert not any(it['id'] == sid for it in items), f'{sid} should have been combined away'
+              print('absorbed id', sid, 'gone')
+          # applied-in-chunk rename must exist
+          for did, exp_pages in [
+                  ('jild24-masala-269', [669, 670])]:
+              hits = [it for it in items if it['id'] == did]
+              assert len(hits) == 1, f'{did}: expected exactly 1 item'
+              assert hits[0]['pages'] == exp_pages, f'{did}: pages mismatch'
+              print(did, 'present (applied-in-chunk rename)')
+          # BOTH 269 and 279 must exist as separate items (parent's
+          # correction: the genuine masala-279 in chunk 16 is NOT the
+          # renamed printed 279 of p. 669)
+          for did, exp_pages in [
+                  ('jild24-masala-269', [669, 670]),
+                  ('jild24-masala-279', [709, 710, 712, 713, 714])]:
+              hits = [it for it in items if it['id'] == did]
+              assert len(hits) == 1, f'{did}: expected exactly 1 item'
+              assert hits[0]['pages'] == exp_pages, f'{did}: pages mismatch'
+              print(did, 'present as a separate item')
+          # distinct items kept separate
+          for did, exp_pages in [
+                  ('jild24-masala-4-12', list(range(87, 112))),
+                  ('jild24-masala-42-46', list(range(146, 167))),
+                  ('jild24-masala-85-93', [286] + list(range(288, 313))),
+                  ('jild24-masala-117', [347, 348, 349, 350]),
+                  ('jild24-masala-130', [361, 362, 363]),
+                  ('jild24-masala-143', [372, 373]),
+                  ('jild24-masala-146', [373]),
+                  ('jild24-masala-148', [374]),
+                  ('jild24-masala-151', [379, 380]),
+                  ('jild24-masala-153', [380, 381]),
+                  ('jild24-masala-167', [451, 452, 454, 455, 456, 457, 458]),
+                  ('jild24-masala-168', [459, 460, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477]),
+                  ('jild24-masala-278', [677, 678] + list(range(680, 709))),
+                  ('jild24-masala-284', [719, 720]),
+                  ('jild24-pesh-lafz', [6, 7, 8, 9, 10, 11])]:
+              hits = [it for it in items if it['id'] == did]
+              assert len(hits) == 1, f'{did}: expected exactly 1 item'
+              if exp_pages is not None:
+                  assert hits[0]['pages'] == exp_pages, f'{did}: pages mismatch'
+              print(did, 'present (kept separate)')
+          assert len(items) == 207
+          assert len(pages) == 640
+          assert min(pages) == 6 and max(pages) == 720
+          assert len(set(it['id'] for it in items)) == len(items)
+          # exactly one empty jawab, and it is the allow-listed masala-64
+          # (genuinely empty in the source: bare «الجواب:» at the end of
+          # p. 196; p. 197 opens masala-65)
+          assert {it['id'] for it in items if not it.get('tashreeh_jawab')} == {
+              'jild24-masala-64'}
+          assert {it['id'] for it in items if not it.get('tashreeh_sawal')} == {
+              'jild24-pesh-lafz'}
+          print('VERIFICATION PASSED')
+          EOF
+      - name: Create release with merged file
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la jild-24.json
+          gh release create v1.0 jild-24.json --title "Jild 24 tashreeh - merged" --notes "Merged tashreeh for Fatawa Razviya Jild 24: 207 items, 640 pages (volume_id 39, pp. 6-720, 75 source-DB gap pages). Generated by merge_jild24.py from the 17 chunk files (chunk 11 split into 11a/11b); 4 combine cases (masala-18 sawal-concatenated, masala-84 cross-id rename-then-combine, masala-166, masala-250); 1 applied-in-chunk rename (printed 279 p. 669 -> masala-269); genuine masala-279 kept separate [709-714]; exactly one empty jawab (masala-64, genuinely empty in the source: bare Al-Jawab at the end of p. 196)." || gh release upload v1.0 jild-24.json --clobber
